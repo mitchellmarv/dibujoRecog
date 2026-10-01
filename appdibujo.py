@@ -1,5 +1,6 @@
 import math
 import random
+from importlib.metadata import version as pkg_version
 
 import numpy as np
 import streamlit as st
@@ -82,6 +83,7 @@ st.markdown(
 
     /* ---- Centrar el tablero respecto al título ---- */
     .stElementContainer:has(iframe),
+    [class*="st-key-canvas_"],
     [data-testid="stCustomComponentV1"] {
         display: flex !important;
         justify-content: center !important;
@@ -162,6 +164,16 @@ st.title("🌌 Detector de Colores Galáctico")
 CANVAS_W = 600
 CANVAS_H = 400
 
+# Desde la versión 0.10 el lienzo usa Fabric.js 7: los tipos van capitalizados ("Rect", "Circle"...)
+try:
+    NEW_CANVAS = tuple(int(x) for x in pkg_version("streamlit-drawable-canvas").split(".")[:2]) >= (0, 10)
+except Exception:
+    NEW_CANVAS = False
+
+
+def fabric_type(name):
+    return name.capitalize() if NEW_CANVAS else name
+
 # ---------- Estado ----------
 if "objects" not in st.session_state:
     st.session_state.objects = []
@@ -206,24 +218,24 @@ def build_shape(name, size, fill, stroke, stroke_w):
     cy = CANVAS_H / 2 + random.randint(-30, 30)
 
     if name == "Círculo":
-        return {**base, "type": "circle", "radius": size / 2,
+        return {**base, "type": fabric_type("circle"), "radius": size / 2,
                 "left": cx - size / 2, "top": cy - size / 2}
     if name == "Elipse":
-        return {**base, "type": "ellipse", "rx": size / 2, "ry": size / 3.5,
+        return {**base, "type": fabric_type("ellipse"), "rx": size / 2, "ry": size / 3.5,
                 "left": cx - size / 2, "top": cy - size / 3.5}
     if name == "Cuadrado":
-        return {**base, "type": "rect", "width": size, "height": size,
+        return {**base, "type": fabric_type("rect"), "width": size, "height": size,
                 "left": cx - size / 2, "top": cy - size / 2}
     if name == "Rectángulo":
-        return {**base, "type": "rect", "width": size * 1.6, "height": size,
+        return {**base, "type": fabric_type("rect"), "width": size * 1.6, "height": size,
                 "left": cx - size * 0.8, "top": cy - size / 2}
     if name == "Triángulo":
-        return {**base, "type": "triangle", "width": size, "height": size,
+        return {**base, "type": fabric_type("triangle"), "width": size, "height": size,
                 "left": cx - size / 2, "top": cy - size / 2}
 
     sides = {"Rombo": 4, "Pentágono": 5, "Hexágono": 6, "Estrella": 5}[name]
     pts, w, h = polygon_points(sides, size / 2, star=(name == "Estrella"))
-    return {**base, "type": "polygon", "points": pts,
+    return {**base, "type": fabric_type("polygon"), "points": pts,
             "left": cx - w / 2, "top": cy - h / 2}
 
 
@@ -378,7 +390,7 @@ with st.sidebar:
 st.subheader("Dibuja en el tablero y presiona el botón para detectar los colores")
 
 # ---------- Lienzo ----------
-canvas_result = st_canvas(
+canvas_kwargs = dict(
     fill_color=fill_color,  # relleno opaco para que el color detectado sea exacto
     stroke_width=stroke_width,
     stroke_color=stroke_color,
@@ -389,6 +401,12 @@ canvas_result = st_canvas(
     drawing_mode=drawing_mode,
     key=f"canvas_{CANVAS_W}_{CANVAS_H}_{st.session_state.canvas_version}",
 )
+try:
+    # Versiones nuevas (>= 0.10): hay que pedir explícitamente los píxeles del dibujo
+    canvas_result = st_canvas(**canvas_kwargs, return_image_data=True)
+except TypeError:
+    # Versiones antiguas no conocen ese parámetro
+    canvas_result = st_canvas(**canvas_kwargs)
 
 if canvas_result.json_data is not None:
     st.session_state.objects = canvas_result.json_data.get("objects", [])
@@ -396,12 +414,22 @@ if canvas_result.json_data is not None:
 analyze_button = st.button("🎨 Detectar colores", type="secondary")
 
 if analyze_button:
-    if canvas_result.image_data is None:
+    try:
+        image_data = canvas_result.image_data
+    except RuntimeError as e:
+        image_data = None
+        st.error(
+            "No pude leer la imagen del tablero. Instala la dependencia opcional con "
+            '`pip install "streamlit-drawable-canvas[image]"`. '
+            f"Detalle: {e}"
+        )
+
+    if image_data is None:
         st.warning("Dibuja algo en el tablero primero.")
     else:
         with st.spinner("Analizando colores ..."):
             colors = analyze_colors(
-                canvas_result.image_data, hex_to_rgb(bg_color), max_colors, min_share
+                image_data, hex_to_rgb(bg_color), max_colors, min_share
             )
 
         if not colors:
